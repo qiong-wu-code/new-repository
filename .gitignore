@@ -1,0 +1,55 @@
+# ===== 构建产物 =====
+dist/
+
+# ===== 运行产物 =====
+results/
+results.db
+results.db-journal
+*.sqlite
+*.sqlite-journal
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ===== 虚拟环境 =====
+.venv/
+venv/
+env/
+
+# ===== IDE / 编辑器 =====
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ===== macOS =====
+.DS_Store
+
+# ===== Windows =====
+Thumbs.db
+desktop.ini
+
+# ===== Linux =====
+*~
+
+# ===== 日志和临时文件 =====
+*.log
+*.tmp
+*.bak
+
+# ===== 本地配置（可能含敏感信息）=====
+.env
+.env.local
+config.local.yaml
+secrets.yaml
+
+# ===== 测试产物 =====
+.coverage
+htmlcov/
