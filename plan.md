@@ -398,3 +398,38 @@ open_questions:
 - 多行文本用 `|` 或 `>` 开头
 - 缩进统一使用 2 空格,不要用 tab
 - 输出前自检:确保去掉 markdown 包裹后,能被 `yaml.safe_load` 解析
+
+
+split_plan:
+  strategy: by_tag
+  rationale: API 数量较多（23个），按 tag 拆分可确保 generate_test 阶段针对不同行为模式（如构造 VS 查询）采用不同的断言策略
+  batches:
+    - batch_id: snnxtensor_construct
+      tag: construct
+      apis: [snnxtensor.get_snnx_tensor, snnxtensor.__init__]
+    - batch_id: snnxtensor_query
+      tag: query
+...
+
+class TestSnnxTensor:
+    """Test SnnxTensor API Class
+
+    This Class is created to test the SnnxTensor api by the pytest framework,
+    which indicates that all future test cases will be based on the pytest.
+
+    The tensor method is a fixture,
+    which return a tensor object that can be used by every function in the TestSnnxTensor class.
+    """
+    @pytest.fixture(scope='function')
+    def tensor(self):
+        tensor = ...
+        yield tensor
+        del tensor
+
+    def test_get_name_1(self, tensor):
+        """
+        Test get_name api
+
+        Test whether the api can get the correct name when the id is the default value ''
+        """
+     ...
