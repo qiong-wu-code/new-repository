@@ -16,6 +16,37 @@
 - 用 type hints。开头加 `from __future__ import annotations`。
 - 不要发起任何网络请求,不要起子进程,不要用多线程。
 
+== conversion 判定规则 ==
+
+判定逻辑【目前】只看一条规则:最新 log 里出现
+`^Traceback \(most recent call last\):\s*$` 这一行 => FAIL,否则 PASS。
+
+但要注意:这套规则【以后大概率会扩充】,因为不是所有失败都会留下
+Python traceback —— 比如 SDK 段错误、被 kill 掉、写出非法产物
+但进程 0 退出之类的情况。所以在写代码时:
+
+1. 把判定逻辑集中到一个独立函数里,签名形如:
+     def classify_log(log_text: str) -> tuple[str, str]:
+         """返回 (status, evidence)。status ∈ {"PASS","FAIL"};
+         evidence 是触发该判定的证据文本(FAIL 时是 traceback 块,
+         PASS 时是空串)。"""
+2. 函数内部用一个【按顺序检查的规则列表】,每条规则一个小函数,
+   返回 None 或 (匹配到的证据文本)。任一规则命中就 FAIL,全没命中
+   就 PASS。当前的列表里只有 traceback 一条规则。
+3. 在该函数上方写一段醒目的注释,标题就叫
+   "FAILURE DETECTION RULES — extend here",写明:
+     - 当前规则:traceback 出现
+     - 增加新规则的方法:在 RULES 列表追加一个 (名字, 检测函数)
+     - 强调"warning"/"error"/"fail" 字面词【目前不算 FAIL】,
+       因为成功 case 也常打这些词;以后要加这类规则必须用更精确的
+       上下文(比如"^FATAL: " 行首 + 大写)而不是裸字面匹配。
+4. JSON 输出里 FAIL 记录加一个新字段 "fail_reason",值是命中的规则名
+   (目前固定为 "traceback")。这样以后日志里能看出是哪条规则命中的。
+
+不要写"插件加载机制""动态注册"之类的过度设计。就是一个 list,
+里面放 tuple,简单直接。
+
+
 == 领域背景(每个脚本都要用,请仔细看) ==
 - 一次回归跑测的结果会落在一个根目录下,根目录里有 100+ 个模型子目录。
 - 每个模型子目录的命名形如 `01-01_YOLO_v4_1`,正则:
