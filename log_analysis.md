@@ -349,6 +349,141 @@ Part 3 / 3:写 `scripts/build_xlsx.py`。
 
 == 一些细节 ==
 - A2 处冻结窗格。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+请帮我写一份 SKILL.md,用于一个名为 qa-regression-parser 的 skill。
+这个 skill 的作用是把模型量化回归测试的结果(conversion 日志 + SNR 日志)
+解析后输出成一份 xlsx 报告。skill 由三个独立 CLI 脚本组成,分别是
+parse_conversion.py、parse_snr.py、build_xlsx.py,统一放在 scripts/ 下。
+
+== 输出要求 ==
+- 一个完整的 SKILL.md 文件,Markdown 格式,顶部有 YAML frontmatter。
+- 直接出文件内容,不要写"以下是文件……"之类的 preamble。
+- 用 ```markdown``` 代码块包起来。
+- 用中文写正文,但是 frontmatter 里的 name 和命令行示例保持英文。
+
+== YAML frontmatter ==
+只有两个字段:
+  name: qa-regression-parser
+  description: <一段话,见下>
+
+description 字段非常重要,它是这个 skill 被触发的【唯一依据】 —— 当用户
+说类似的话时,coding agent 会去读取这份 SKILL.md。所以 description 要:
+- 第一句先说 skill 干什么(parse 模型量化回归测试结果,产 xlsx 报告)
+- 第二句开始列触发场景,要"主动"一些。常见的触发说法举例:
+  "解析 conversion 日志"、"看一下哪些模型跑挂了"、"出回归报告"、
+  "汇总 SNR"、"批量处理 Convertion_result"、用户直接给一个根目录
+  问"这次跑得怎么样"、提到 id_order.txt 文件等等。把这些场景都
+  涵盖进去,即使用户没说"用 qa-regression-parser"也要能触发。
+- 整段控制在 3-5 句话,不要太长。
+- 用英文写(描述触发场景,英文 agent 匹配更准),但中间可以混中文
+  关键词比如 "Convertion_result"。
+
+== 正文结构(Markdown 一级标题用 #,二级用 ##) ==
+
+# QA Regression Parser
+
+(一段话总述,讲清楚这个 skill 把什么变成什么)
+
+## 何时使用本 skill
+
+(列出触发信号。包括目录结构特征 —— 子目录名形如 01-01_YOLO_v4_1、
+存在 Convertion_result/ 这种特征目录、用户提到 id_order.txt、
+用户问"哪些模型挂了"等。明确说"用户不需要用确切的关键词",
+看到这些信号就该用。)
+
+## 输入目录的假设布局
+
+(用一段代码块画出预期的目录树。包括:根目录下若干 <id>_<name>/
+子目录,每个子目录下有一个同名的模型文件(扩展名不固定,我们也不读它)、
+有 Convertion_result/convert/.log/*.log 多份(只看 mtime 最新一份)、
+SNR 日志通常在 Convertion_result/snr/ 或 Convertion_result/snr/.log/。
+另外还有一个根目录外的 id_order.txt,每行一个 model_id。)
+
+## conversion 判定规则
+
+(明确强调【纯规则】,不要再做花式判断:
+  - FAIL: 最新 log 里出现 `Traceback (most recent call last):` 这一行
+  - PASS: 没出现
+  - NO_LOG: 模型目录在但 .log 目录下没文件
+  - MISSING: id_order.txt 里有但根目录下没这个模型
+  - SKIPPED: 目录名不符合 <id>_<name> 正则,会被记到单独 list,不进结果
+日志里的 "warning" "error" "fail" 字面词【一律不算 FAIL】,因为这套
+跑测里成功的 case 也经常打这些词。只有 traceback 标记算。)
+
+## 怎么用
+
+(分三步给出 bash 命令示例,每步一段。重点说明:三步是独立的、可以
+分别重跑、中间有 JSON 文件可以 diff。如果用户没提供 id_order.txt,
+build_xlsx.py 会按字母序兜底并打 warning。)
+
+## 输出 xlsx 的列结构
+
+(列一个 Markdown 表格,列出列名 / 来自哪个脚本 / 备注。列顺序就是:
+model_id, model_name, conversion_status, sdk_version, snr, dtype_org,
+dtype_hw, conversion_log_path, traceback, notes。最后说一句:FAIL 行
+有红色高亮、PASS 绿色、NO_LOG 黄色、MISSING 灰色;traceback 列
+开了自动换行,可以直接看完整内容。)
+
+## 一个模型多条 SNR 记录怎么办
+
+(用户已确认目录名 <model_id>_<model_name> 是唯一的,所以一个目录
+保证一行。如果该目录的 SNR 日志里有多条记录,比如不同 dtype 配置
+各一条,xlsx 里在【同一行】用 \n 把多条记录拼起来,
+例如 snr 单元格 = "42.7\n38.1"、dtype_hw 单元格 = "int8\nint4"。
+不要拆成多行。)
+
+## 稳定性设计取舍
+
+(用 bullet list 列出来,每条一行解释为什么这么做:
+  - 最新 log 用 mtime 取,不用文件名排序(命名不规则)
+  - 目录名走严格正则,不匹配就跳过,不让脚本崩
+  - 单模型异常被 catch,落到 notes 列,继续处理其他模型
+  - utf-8 + errors=replace,容忍乱码
+  - traceback 抓取 200 行上限,防日志爆炸
+  - 中间 JSON pretty-print,可以 diff
+  - 多 traceback 抓最后一段(前面的常被 re-raise 后处理掉了))
+
+## 适配你自己的 SNR 日志格式
+
+(说明 parse_snr.py 顶部有一个显眼的 ADAPT 注释块,里面是
+SNR_LOG_DIRS_RELATIVE / SNR_KEY_PATTERNS / REQUIRED_KEYS 三个常量。
+拿到一份真实 SNR 日志后:1) 看一眼格式,2) 改这三个常量,3) 重跑。
+不要去动主体逻辑。)
+
+## 本 skill 不做的事
+
+(诚实列出范围外的:
+  - 不解读 SNR 数值好坏(没有阈值判断,只如实转录)
+  - 不做 LLM 报错根因分析。traceback 已原样进 xlsx,需要根因总结时
+    把 FAIL 行的 traceback 列复制出来单独问 agent 即可。
+  - 不修改输入目录任何文件。)
+
+== 写作风格 ==
+- 用陈述句、祈使句,不要"我们建议"、"也许可以"这种弱措辞。
+- 解释【为什么】这么做,而不是只说【怎么做】。比如说"用 mtime 取最新"
+  之后要补一句"因为文件名命名不规则,字母序不可靠"。
+- 不要长篇大论。每节控制在合理长度,整份 SKILL.md 不要超过 200 行。
+- 不要用 emoji。
+
+
+
+
+
+
+
 - 表头字体加粗。
 - 所有数据单元格:vertical=top、wrap_text=True。
 - 不要尝试自适应列宽(openpyxl 在无 GUI 环境下不可靠),用上面写死的列宽。
