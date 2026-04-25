@@ -81,8 +81,8 @@ Python traceback —— 比如 SDK 段错误、被 kill 掉、写出非法产物
 Part 1 / 3:写 `scripts/parse_conversion.py`。
 
 == 用途 ==
-遍历回归测试根目录,找到每个模型最新的 conversion 日志,按 traceback
-是否出现来判定 PASS/FAIL/NO_LOG,把结果写成一份 JSON。
+遍历回归测试根目录,找到每个模型最新的 conversion 日志,判定 PASS / FAIL /
+NO_LOG,把结果写成一份 JSON。
 
 == CLI 参数 ==
   --root PATH    必填,根目录(下面是各模型子目录)
@@ -97,24 +97,83 @@ Part 1 / 3:写 `scripts/parse_conversion.py`。
    b. 进入 `<模型目录>/Convertion_result/convert/.log/` 看里面的文件。
       该目录不存在 / 没有任何文件 => status = NO_LOG。
    c. 否则取 mtime 最新的文件(并列时按文件名倒序作为 tiebreak,保证确定性)。
-   d. 读这份文件(utf-8、errors='replace')。找出所有匹配 traceback 起始
-      正则的行:
-        - 一个都没有 => PASS,traceback 字段为空字符串。
-        - 有一个或多个 => FAIL,捕获【最后一段】traceback。
-2. traceback 抓取规则(只抓最后一段,因为前面的 traceback 经常是被
-   re-raise 后又处理掉了的,真正致命的是最后一段):
-   从那一行 `Traceback (most recent call last):` 开始,继续吃后续的行,
-   被吃进来的条件是【任一满足】:
-     - 行以空格或 tab 开头(缩进的栈帧行),或
-     - 是缩进栈帧之后的第一个非缩进非空行(也就是异常摘要行,例如
-       `ValueError: foo`)
-   停止条件【任一满足】:
-     - 摘要行已经被吃了之后,遇到一个空行,或
-     - 摘要行已经被吃了之后,遇到一个非缩进非空行,或
-     - 累计已经吃满 200 行(上限,触发上限就追加一行
-       `... [traceback truncated by parser at 200 lines]` 然后停)
-   摘要行出现之前,可以容忍中间夹一个空行(不要因为一个空行就早停)。
-3. 单个模型抛异常 => status=ERROR,异常信息写进 notes。
+   d. 读这份文件(utf-8、errors='replace'),把整份文本传给 classify_log
+      函数(见下面"判定规则的代码组织"一节),拿到 (status, fail_reason,
+      evidence) 三元组。
+2. 单个模型抛异常 => status=ERROR,异常信息写进 notes,fail_reason 留空。
+
+== 判定规则的代码组织(重要) ==
+
+判定逻辑【目前】只看一条规则:日志里出现
+`^Traceback \(most recent call last\):\s*$` 这一行 => FAIL。
+
+但要注意:这套规则【以后大概率会扩充】 —— 比如 SDK 段错误、被 kill
+掉、写出非法产物但进程 0 退出之类的失败,不会留下 Python traceback。
+所以代码必须把"以后能加规则"的口子留好,而不是把 traceback 检查
+直接写死在主流程里。
+
+具体要求:
+
+1. 写一个独立函数,签名:
+     def classify_log(log_text: str) -> tuple[str, str, str]:
+         """返回 (status, fail_reason, evidence)。
+         status ∈ {"PASS", "FAIL"}。
+         fail_reason: FAIL 时是命中的规则名(当前固定为 "traceback");
+                      PASS 时是空串。
+         evidence: FAIL 时是触发判定的证据文本(traceback 块原文);
+                   PASS 时是空串。"""
+
+2. 函数内部用一个【按顺序检查的规则列表】,每条规则一个小函数,
+   函数签名是 `Callable[[str], Optional[str]]`:输入完整日志文本,
+   返回命中证据(字符串)或 None。结构形如:
+
+     RULES: list[tuple[str, Callable[[str], Optional[str]]]] = [
+         ("traceback", _check_traceback),
+         # 以后追加新规则就在这里 append 一个 tuple
+     ]
+
+3. classify_log 主体逻辑:遍历 RULES,任一规则返回非 None 就立刻
+   FAIL,fail_reason 取该规则名,evidence 取返回的证据文本;
+   全部规则都返回 None 就 PASS。
+
+4. 在 RULES 定义【上方】加一段醒目的注释,标题就叫
+   "FAILURE DETECTION RULES — extend here",写清楚:
+   - 当前规则:traceback 出现
+   - 怎么加新规则:写一个 _check_xxx(log_text) -> Optional[str]
+     函数,在 RULES 列表里 append ("xxx", _check_xxx)
+   - 警告:不要用裸的 "error" / "warning" / "fail" 字面词匹配,
+     因为成功 case 也常打这些词。要加这类规则必须用更精确的
+     锚点(比如行首大写 "^FATAL: " 这种)
+   - 警告:_check_xxx 函数返回的证据文本会进 JSON 的 evidence 字段
+     和最终 xlsx 的 traceback 列,所以应该是【人类可读、能用来排查
+     问题】的那一段,不是简单的 "matched" 标记
+
+5. _check_traceback 的实现就是后面"traceback 抓取规则"那一节描述的逻辑,
+   找不到返回 None,找到就返回抓出来的 traceback 块文本。
+
+不要写"插件加载机制""动态注册""配置文件读取"之类的过度设计。
+就是一个 list,里面放 tuple,直白。
+
+== traceback 抓取规则(_check_traceback 内部用) ==
+
+一份日志里可能有多个 traceback。【只抓最后一段】,因为前面的
+traceback 经常是被 re-raise 后又处理掉了的,真正致命的是最后一段。
+
+抓取算法:
+1. 找出所有匹配 `^Traceback \(most recent call last\):\s*$` 的行,
+   一个都没有 => 返回 None。
+2. 从最后一处的那一行开始,继续吃后续的行。被吃进来的条件是
+   【任一满足】:
+   - 行以空格或 tab 开头(缩进的栈帧行),或
+   - 是缩进栈帧之后的第一个非缩进非空行(也就是异常摘要行,
+     例如 `ValueError: foo`)
+3. 停止条件【任一满足】:
+   - 摘要行已经被吃了之后,遇到一个空行,或
+   - 摘要行已经被吃了之后,遇到一个非缩进非空行,或
+   - 累计已经吃满 200 行(上限,触发上限就追加一行
+     `... [traceback truncated by parser at 200 lines]` 然后停)
+4. 摘要行出现之前,可以容忍中间夹一个空行(不要因为一个空行就早停)。
+5. 把吃进来的所有行用 \n 拼起来返回。
 
 == 输出 JSON 结构 ==
 {
@@ -127,19 +186,25 @@ Part 1 / 3:写 `scripts/parse_conversion.py`。
       "model_id": "01-01",
       "model_name": "YOLO_v4_1",
       "status": "PASS" | "FAIL" | "NO_LOG" | "ERROR",
+      "fail_reason": "<规则名,例如 'traceback';非 FAIL 时为空串>",
       "log_path": "<绝对路径或 null>",
-      "traceback": "<完整 traceback 文本,或空串>",
+      "traceback": "<evidence 文本,FAIL 时是抓到的证据块,
+                     非 FAIL 时为空串>",
       "notes": "<空串或人类可读说明>"
     }, ...
   }
 }
+
+注意:traceback 这个字段名虽然叫 traceback,但其实存的是 evidence
+(因为目前只有 traceback 一种证据,所以字段名沿用)。后面如果加了
+新规则,evidence 可能是别的内容,比如段错误信息;字段名暂不改,
+保持向后兼容。
 
 == 必须处理的边界情况 ==
 - 日志文件读不开(权限/解码失败):catch 住,status=ERROR,原因进 notes。
 - .log 目录存在但是空的:NO_LOG。
 - 一份日志里有多个 traceback:只抓【最后一段】。
 - .log 目录下文件名很奇怪(比如不以 .log 结尾):仍然纳入,mtime 说了算。
-
 
 
 Part 2 / 3:写 `scripts/parse_snr.py`。
